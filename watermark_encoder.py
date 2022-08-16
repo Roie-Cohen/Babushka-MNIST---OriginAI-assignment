@@ -247,5 +247,5 @@ def main(is_train_encoder=False, is_train_classifier=False, is_create_encoded=Fa
 
 
 if __name__ == "__main__":
-    main(is_train_classifier=False, is_train_encoder=False, is_create_encoded=True)
+    main(is_train_classifier=False, is_train_encoder=False, is_create_encoded=False)
     print('done')

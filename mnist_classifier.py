@@ -93,8 +93,13 @@ def train():
     return best_model, losses
 
 
+def main(is_train_classifier=False):
+    if is_train_classifier:
+        classifier, losses = train()
+        plot_loss_graph(losses, save_path="figures/MNIST_classifier_loss")
+        torch.save(classifier, "trained_models/MNIST_classifier.pt")
+
+
 if __name__ == "__main__":
-    classifier, losses = train()
-    plot_loss_graph(losses, save_path="figures/MNIST_classifier_loss")
-    torch.save(classifier, "trained_models/MNIST_classifier.pt")
+    main(is_train_classifier=True)
 

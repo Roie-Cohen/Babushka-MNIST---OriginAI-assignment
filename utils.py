@@ -16,7 +16,7 @@ MODEL_FOLDER = "trained_models"
 
 class ImagesDataset(Dataset):
 
-    def __init__(self, data_path, transform=None, target_transform=None):
+    def __init__(self, data_path, transform=None, target_transform=None, label_ind=1):
         with open(data_path, "rb") as f:
             data = pickle.load(f)
 
@@ -24,7 +24,7 @@ class ImagesDataset(Dataset):
         if type(self.images[0]) is Image:
             self.images = [PILToTensor()(image) for image in self.images]
 
-        self.labels = [d[1] for d in data]
+        self.labels = [d[label_ind] for d in data]
         self.transform = transform
         self.target_transform = target_transform
 
