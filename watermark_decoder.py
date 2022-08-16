@@ -1,11 +1,12 @@
+import copy
 import pickle
 
 import torch
 import torch.nn as nn
 import torchvision.transforms
-from torchvision.datasets import MNIST
-from torchvision.transforms import ToTensor
+from numpy import ceil
 from torch.utils.data import DataLoader, Dataset
+from utils import plot_loss_graph
 
 
 class WatermarkDecoder(nn.Module):
@@ -37,10 +38,8 @@ class WatermarkDecoder(nn.Module):
 
 class EncodedImagesDataset(Dataset):
 
-    FILE_PATH = "data/encoded/encoded_data.pickle"
-
-    def __init__(self, transform=None, target_transform=None):
-        with open(self.FILE_PATH, "rb") as f:
+    def __init__(self, data_path, transform=None, target_transform=None):
+        with open(data_path, "rb") as f:
             encoded = pickle.load(f)
 
         self.images = [enc[0] for enc in encoded]
@@ -70,30 +69,30 @@ def model_accuracy(test_model, data):
     return correct/len(data.dataset.img_labels)
 
 
-def train():
+def train_watermark_decoder():
+    torch.manual_seed(100)
 
     learning_rate = 1E-3
     batch_size = 128
-    epochs = 10
-    torch.manual_seed(100)
-    test_size = 0.1
+    epochs = 15
 
     # load data
-    data = EncodedImagesDataset(target_transform=torchvision.transforms.Lambda(lambda x: x[1]))
-    train_data = data
-    test_data = data
-    # train_samples = int(len(data.images) * (1-test_size))
-    # train_data = [im.type(torch.FloatTensor) for im in data.images[:train_samples]]
-    # test_data = [im.type(torch.FloatTensor) for im in data.images[train_samples:]]
+    train_dataset = EncodedImagesDataset("data/encoded/train_encoded_data.pickle", target_transform=torchvision.transforms.Lambda(lambda x: x[1]))
+    test_dataset = EncodedImagesDataset("data/encoded/test_encoded_data.pickle", target_transform=torchvision.transforms.Lambda(lambda x: x[1]))
+    batches = ceil(len(train_dataset.images) / batch_size)
 
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    # test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
     loss_func = nn.CrossEntropyLoss()
 
     model = WatermarkDecoder()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    min_loss = torch.inf
+    best_model = copy.deepcopy(model)
+    t = 0
+    losses = []
     # train the classifier
     for epoch in range(epochs):
         model.train()
@@ -104,13 +103,25 @@ def train():
             loss.backward()
             optimizer.step()
 
+            losses.append(loss.item())
             if b_i % 100 == 0:
-                print(f'epoch={epoch+1}/{epochs}   loss={loss.item()}    accuracy={100*model_accuracy(model, train_loader)}%')
+                accuracy = 100 * model_accuracy(model, test_loader)
+                t = (b_i + 1) / (batches * epochs) + epoch / epochs
+                print(f'process={100 * t:.2f}  loss={loss.item():.3f}  accuracy={accuracy:.2f}%')
 
-    return model
+            if t > 0.5 and loss < min_loss:
+                min_loss = loss
+                best_model = copy.deepcopy(model)
+
+    return best_model, losses
+
+
+def main(is_train_decoder=False):
+    if is_train_decoder:
+        decoder, losses = train_watermark_decoder()
+        plot_loss_graph(losses, "figures/watermark_decoder_loss")
+        torch.save(decoder, "trained_models/watermark_decoder.pt")
 
 
 if __name__ == "__main__":
-    model = train()
-    torch.save(model, "trained_models/watermark_decoder.pt")
-
+    main(is_train_decoder=True)

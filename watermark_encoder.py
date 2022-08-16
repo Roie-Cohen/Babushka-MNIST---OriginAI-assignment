@@ -1,3 +1,4 @@
+import copy
 import os
 import pickle
 
@@ -9,7 +10,8 @@ import torch.nn as nn
 import numpy as np
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
-from utils import ImagesDataset, classification_accuracy
+from numpy import ceil
+from utils import ImagesDataset, classification_accuracy, plot_loss_graph
 
 from utils import load_mnist_watermarks
 
@@ -36,14 +38,20 @@ class WatermarkClassifier(nn.Module):
             nn.ReLU()
         )
 
-        self.fc2 = nn.Linear(64, 10)
+        self.fc2 = nn.Sequential(
+            nn.Linear(64, 32),
+            nn.ReLU()
+        )
+
+        self.fc3 = nn.Linear(32, 10)
 
     def forward(self, w):
         w = self.conv1(w)
         w = self.conv2(w)
-        embedding = self.fc1(w)
-        w = self.fc2(embedding)
-        return w, embedding
+        w = self.fc1(w)
+        w = self.fc2(w)
+        w = self.fc3(w)
+        return w
 
 
 class WatermarkEncoder(nn.Module):
@@ -53,58 +61,25 @@ class WatermarkEncoder(nn.Module):
 
         self.fc1 = nn.Linear(10, 28*28)
 
-        # self.upsample_layers = nn.Sequential(
-        #     nn.ConvTranspose2d(1, 16, kernel_size=4),   # 8x8 --> 11x11
-        #     nn.Upsample(scale_factor=2),    # 11x11 --> 22x22
-        #     nn.ConvTranspose2d(16, 1, kernel_size=7),  # 22x22 --> 28x28
-        # )
-        #
         self.blend_layers = nn.Sequential(
             nn.Conv2d(2, 16, kernel_size=5, padding=2),
-            # nn.ReLU(),
             nn.Conv2d(16, 16, kernel_size=3, padding=1),
-            # nn.ReLU(),
             nn.Conv2d(16, 1, kernel_size=3, padding=1),
         )
 
-        # self.embedding_layers = nn.Sequential(
-        #     nn.Conv2d(1, 16, kernel_size=5),    # 28x28 --> 24x24
-        #     nn.ReLU(),
-        #     nn.MaxPool2d(kernel_size=2),        # --> 12x12
-        #     nn.Conv2d(16, 32, kernel_size=3),   # --> 10x10
-        #     nn.ReLU(),
-        #     nn.MaxPool2d(kernel_size=2),        # --> 5x5
-        #     nn.Conv2d(32, 1, kernel_size=1),
-        #     nn.Flatten(),
-        # )
-
     def forward(self, w, image):
-        # upsample watermark to 28x28
         x = self.fc1(w)
         x = x.view(1, 1, 28, 28)
-        # x = self.upsample_layers(w)
-        # combine with the image to stamp
         x = torch.cat([x, image], dim=1)
-        # create watermark and blend to image
         watermark = self.blend_layers(x)
-        # create embedding of the watermark
-        # embedding = self.embedding_layers(watermark)
         return watermark
 
 
-def load_watermarks():
-    ws = load_mnist_watermarks()
-    watermarks = {i: [] for i in range(10)}
-    for w, label in ws:
-        watermarks[label.item()].append(w.type(torch.FloatTensor))
-    return watermarks
-
-
-def create_encoded_watermarks(save_folder=ENCODED_FOLDER):
-    mnist_data = MNIST(root='data', train=True)
-    watermarks = load_mnist_watermarks()
-    model = torch.load("trained_models/watermark_encoder.pt")
-    model.eval()
+def create_encoded_watermarks(save_folder=ENCODED_FOLDER, train=True):
+    mnist_data = MNIST(root='data', train=train)
+    watermarks = load_mnist_watermarks(train=train)
+    watermark_encoder = torch.load("trained_models/watermark_encoder.pt")
+    watermark_encoder.eval()
 
     watermark_classifier = torch.load("trained_models/watermark_classifier.pt")
     watermark_classifier.eval()
@@ -119,9 +94,8 @@ def create_encoded_watermarks(save_folder=ENCODED_FOLDER):
             canvas = mnist_data.data[ii].type(torch.FloatTensor)
             canvas = canvas.view(1, 1, *canvas.size())
             stamp = watermarks[wi][0].type(torch.FloatTensor)
-            stamp = stamp.view(1, *stamp.size())
-            stamp_embedding, _ = watermark_classifier(stamp)
-            watermark = model(stamp_embedding, canvas)
+            stamp_embedding = watermark_classifier(stamp.view(1, *stamp.size()))
+            watermark = watermark_encoder(stamp_embedding, canvas)
             enc = canvas + watermark
 
             enc = torch.maximum(enc, torch.tensor(0))
@@ -131,56 +105,22 @@ def create_encoded_watermarks(save_folder=ENCODED_FOLDER):
             watermark_label = watermarks[wi][1].item()
             encoded.append((enc[0, :, :, :], image_label, watermark_label))
 
-        # # add blank canvases for "None" label
-        # image_inds = np.random.permutation(n)[:6000]
-        # for ii in tqdm(image_inds):
-        #     canvas = mnist_data.data[ii].type(torch.ByteTensor)
-        #     canvas = canvas.view(1, *canvas.size())
-        #     image_label = mnist_data.targets[ii].item()
-        #     encoded.append((canvas, image_label, 11))
+        # add blank canvases for "None" label (label = 10)
+        image_inds = np.random.permutation(n)[:int(n/10)]
+        for ii in tqdm(image_inds):
+            canvas = mnist_data.data[ii].type(torch.ByteTensor)
+            canvas = canvas.view(1, *canvas.size())
+            canvas = copy.deepcopy(torch.tensor(canvas.numpy()))    # necessary unexplainable black magic line...
+            image_label = mnist_data.targets[ii].item()
+            encoded.append((canvas, image_label, 10))
 
     if not os.path.exists(save_folder):
         os.mkdir(save_folder)
-    save_path = os.path.join(save_folder, "encoded_data.pickle")
+    file_name = "train_encoded_data" if train else "test_encoded_data"
+    save_path = os.path.join(save_folder, f"{file_name}.pickle")
     with open(save_path, "wb") as f:
         pickle.dump(encoded, f)
     return encoded
-
-
-# return a tuple of watermarks representing an anchor, positive and negative
-def get_triplet(watermarks_dict):
-    l1, l2 = np.random.permutation(10)[:2]
-    anchor_ind = np.random.randint(len(watermarks_dict[l1]))
-    positive_ind = -1
-    while positive_ind < 0 or positive_ind == anchor_ind:
-        positive_ind = np.random.randint(len(watermarks_dict[l1]))
-    negative_ind = np.random.randint(len(watermarks_dict[l2]))
-
-    anchor = watermarks_dict[l1][anchor_ind]
-    positive = watermarks_dict[l1][positive_ind]
-    negative = watermarks_dict[l2][negative_ind]
-    return anchor, positive, negative
-
-
-def invisible_watermark_loss(watermark, image, margin=0.1):
-    # loss = torch.divide(torch.abs(watermark), image)
-    # loss = torch.add(loss, 1)
-    # loss = torch.log(loss)
-    # loss = torch.subtract(loss, margin)
-    # loss = torch.mean(torch.maximum(loss, torch.tensor(0)))
-    # loss = torch.maximum(watermark, -image)     # encoded image values are non negative
-    # loss = torch.minimum(loss, 255 - image)    # encoded image values up to 255
-    loss1 = torch.mean(torch.maximum(1 - torch.abs(watermark), torch.tensor(0)))
-    loss2 = torch.mean(torch.maximum(torch.abs(watermark) - 3, torch.tensor(0)))  # TODO: fix
-    loss = loss1 + loss2
-    return loss
-
-
-def plot_watermarks(watermarks):
-    n = len(watermarks)
-    fig, ax = plt.subplots(1, n)
-    for i, watermark in enumerate(watermarks):
-        ax[i].imshow(watermark.detach())
 
 
 def train_watermark_classifier():
@@ -191,82 +131,119 @@ def train_watermark_classifier():
     torch.manual_seed(100)
 
     # load data
-    train_data = ImagesDataset("data/watermarks/train_watermarks.pickle")
-    test_data = ImagesDataset("data/watermarks/test_watermarks.pickle")
+    train_dataset = ImagesDataset("data/watermarks/train_watermarks.pickle")
+    test_dataset = ImagesDataset("data/watermarks/test_watermarks.pickle")
+    batches = ceil(len(train_dataset.images) / batch_size)
 
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
     loss_func = nn.CrossEntropyLoss()
 
     model = WatermarkClassifier()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    min_loss = torch.inf
+    best_model = copy.deepcopy(model)
+    t = 0
+    losses = []
     # train the classifier
+    model.train()
     for epoch in range(epochs):
-        model.train()
         for b_i, (images, labels) in enumerate(train_loader):
             optimizer.zero_grad()
-            out, _ = model(images)
+            out = model(images)
             loss = loss_func(out, labels)
             loss.backward()
             optimizer.step()
 
+            losses.append(loss.item())
             if b_i % 100 == 0:
-                print(f'epoch={epoch+1}/{epochs}   loss={loss.item()}    accuracy={100*classification_accuracy(model, test_loader)}%')
+                accuracy = 100 * classification_accuracy(model, test_loader)
+                t = (b_i + 1) / (batches * epochs) + epoch / epochs
+                print(f'process={100 * t:.2f}  loss={loss.item():.3f}  accuracy={accuracy:.2f}%')
 
-    return model
+            if t > 0.5 and loss < min_loss:
+                min_loss = loss
+                best_model = copy.deepcopy(model)
+
+    return best_model, losses
 
 
-def train():
-    watermarks = load_watermarks()
+def invisible_watermark_loss(watermark, min_pix_val=1, max_pix_val=3):
+    loss1 = torch.mean(torch.maximum(min_pix_val - torch.abs(watermark), torch.tensor(0)))
+    loss2 = torch.mean(torch.maximum(torch.abs(watermark) - max_pix_val, torch.tensor(0)))
+    loss = loss1 + loss2
+    return loss
+
+
+def train_watermark_encoder():
+    torch.manual_seed(100)
+
+    watermarks = load_mnist_watermarks()
 
     learning_rate = 1E-4
     steps = 1000
-    distance_margin = 1
 
     # load data
     mnist_data = MNIST(root='data', train=True, download=True, transform=ToTensor())
     n_images = mnist_data.data.size(0)
 
-    loss_distance = nn.TripletMarginLoss(margin=distance_margin)
-
     watermark_classifier = torch.load("trained_models/watermark_classifier.pt")
     watermark_classifier.eval()
+
+    loss_func = invisible_watermark_loss
 
     model = WatermarkEncoder()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    min_loss = torch.inf
+    best_model = copy.deepcopy(model)
+    losses = []
     # train the classifier
+    model.train()
     for step in range(steps):
-        model.train()
         optimizer.zero_grad()
 
-        watermark = watermarks[np.random.randint(10)][np.random.randint(1000)]
-        label_vector, _ = watermark_classifier(watermark.view(1, *watermark.size()))
+        watermark = watermarks[np.random.randint(len(watermarks))][0].type(torch.FloatTensor)
+        label_vector = watermark_classifier(watermark.view(1, *watermark.size()))
 
         canvas = mnist_data.data[np.random.randint(n_images)]
         canvas = canvas.view(1, 1, *canvas.size())
 
         w = model(label_vector, canvas)
 
-        # loss = loss_distance(em_a, em_p, em_n)
-        loss = invisible_watermark_loss(w, canvas)
-        # loss = 0
-        # for w in (w_a, w_p, w_n):
-        #     loss = loss + invisible_watermark_loss(w, canvas)
+        loss = loss_func(w)
 
         loss.backward()
         optimizer.step()
 
+        losses.append(loss.item())
+        t = step / steps
         if step % 10 == 0:
-            print(f'step={step+1}/{steps}   loss={loss.item()}   S={w.abs().mean().item()}')
+            print(f'process={100 * t:.2f}  loss={loss.item():.3f}  w_pixel={w.abs().median().item():.2f}')
 
-    return model
+        if t > 0.5 and loss < min_loss:
+            min_loss = loss
+            best_model = copy.deepcopy(model)
+
+    return best_model, losses
+
+
+def main(is_train_encoder=False, is_train_classifier=False, is_create_encoded=False):
+    if is_train_classifier:
+        classifier, losses = train_watermark_classifier()
+        torch.save(classifier, "trained_models/watermark_classifier.pt")
+        plot_loss_graph(losses, save_path="figures/watermark_classifier_loss")
+    if is_train_encoder:
+        encoder, losses = train_watermark_encoder()
+        torch.save(encoder, "trained_models/watermark_encoder.pt")
+        plot_loss_graph(losses, save_path="figures/watermark_encoder_loss")
+    if is_create_encoded:
+        create_encoded_watermarks(train=True)
+        create_encoded_watermarks(train=False)
 
 
 if __name__ == "__main__":
-    model = train()
-    torch.save(model, "trained_models/watermark_encoder.pt")
-    create_encoded_watermarks()
+    main(is_train_classifier=False, is_train_encoder=False, is_create_encoded=True)
     print('done')

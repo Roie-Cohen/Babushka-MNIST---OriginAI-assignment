@@ -1,34 +1,40 @@
+import copy
+
 import torch
 import torch.nn as nn
+from numpy import ceil
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader
+from utils import plot_loss_graph
 
 
 class DigitClassifier(nn.Module):
 
     def __init__(self):
         super(DigitClassifier, self).__init__()
-        # convolutional later 1: 28x28 --> 12x12 (x16)
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=5, stride=1),
+
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=5, stride=1),  # 28x28 (x1) --> 24x24 (x16)
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.MaxPool2d(kernel_size=2, stride=2)   # --> 12x12 (x16)
         )
-        # convolutional later 1: 12x12 (x16) --> 5x5 (x16)
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 16, kernel_size=3, stride=1),
+
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(16, 16, kernel_size=3, stride=1),  # --> 10x10 (x16)
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.MaxPool2d(kernel_size=2, stride=2)   # --> 5x5 (x16)
         )
-        # output linear layer: 400 --> 10
-        self.out_layer = nn.Linear(400, 10)
+
+        self.fc1 = nn.Sequential(
+            nn.Flatten(),   # 5x5 (x16) --> 400
+            nn.Linear(400, 10)  # --> 10
+        )
 
     def forward(self, x):
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = torch.flatten(x, start_dim=1)
-        x = self.out_layer(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.fc1(x)
         return x
 
 
@@ -42,24 +48,28 @@ def model_accuracy(test_model, data):
 
 
 def train():
+    torch.manual_seed(100)
 
     learning_rate = 1E-3
     batch_size = 128
-    epochs = 10
-    torch.manual_seed(100)
+    epochs = 5
 
-    # load data
-    train_data = MNIST(root='data', train=True, download=True, transform=ToTensor())
-    test_data = MNIST(root='data', train=False, download=True, transform=ToTensor())
+    train_dataset = MNIST(root='data', train=True, download=True, transform=ToTensor())
+    test_dataset = MNIST(root='data', train=False, download=True, transform=ToTensor())
+    batches = ceil(train_dataset.data.size(0) / batch_size)
 
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
     loss_func = nn.CrossEntropyLoss()
 
     model = DigitClassifier()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    min_loss = torch.inf
+    best_model = copy.deepcopy(model)
+    t = 0
+    losses = []
     # train the classifier
     for epoch in range(epochs):
         model.train()
@@ -70,13 +80,21 @@ def train():
             loss.backward()
             optimizer.step()
 
+            losses.append(loss.item())
             if b_i % 100 == 0:
-                print(f'epoch={epoch+1}/{epochs}   loss={loss.item()}    accuracy={100*model_accuracy(model, test_loader)}%')
+                accuracy = 100*model_accuracy(model, test_loader)
+                t = (b_i+1)/(batches*epochs) + epoch/epochs
+                print(f'process={100*t:.2f}  loss={loss.item():.3f}  accuracy={accuracy:.2f}%')
 
-    return model
+            if t > 0.5 and loss < min_loss:
+                min_loss = loss
+                best_model = copy.deepcopy(model)
+
+    return best_model, losses
 
 
 if __name__ == "__main__":
-    model = train()
-    torch.save(model, "trained_models/MNIST_classifier.pt")
+    classifier, losses = train()
+    plot_loss_graph(losses, save_path="figures/MNIST_classifier_loss")
+    torch.save(classifier, "trained_models/MNIST_classifier.pt")
 

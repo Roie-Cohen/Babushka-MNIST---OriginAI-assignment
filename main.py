@@ -19,11 +19,11 @@ def model_accuracy(test_model, data):
 
 
 def encoded_classification_accuracy():
-    model = torch.load("trained_models/MNIST_classifier.pt")
-    data_path = "data/encoded/encoded_data.pickle"
+    mnist_classifier = torch.load("trained_models/MNIST_classifier.pt")
+    data_path = "data/encoded/train_encoded_data.pickle"
     data = ImagesDataset(data_path)
     data_loader = DataLoader(data, batch_size=1000)
-    return model_accuracy(model, data_loader)
+    return model_accuracy(mnist_classifier, data_loader)
 
 
 if __name__ == "__main__":

@@ -57,37 +57,13 @@ def create_mnist_watermarks(save_folder=WATERMARK_FOLDER, train=True):
 
 
 # loads the watermarks and convert to tensor format
-def load_mnist_watermarks(load_folder=WATERMARK_FOLDER):
-    file_path = os.path.join(load_folder, "train_watermarks.pickle")
+def load_mnist_watermarks(load_folder=WATERMARK_FOLDER, train=True):
+    file_name = "train_watermarks" if train else "test_watermarks"
+    file_path = os.path.join(load_folder, f"{file_name}.pickle")
     with open(file_path, "rb") as f:
         watermarks = pickle.load(f)
-    watermarks = [(PILToTensor()(image), torch.tensor(label)) for image, label in watermarks]
+    watermarks = [(PILToTensor()(image).view(1, *image.size), torch.tensor(label)) for image, label in watermarks]
     return watermarks
-
-
-def create_encoded_watermarks(save_folder=ENCODED_FOLDER):
-    mnist_data = MNIST(root='data', train=True)
-    watermarks = load_mnist_watermarks()
-    model = torch.load("trained_models/watermark_encoder.pt")
-    model.eval()
-
-    n = len(watermarks)
-    image_inds = np.random.permutation(n)
-    watermark_inds = np.random.permutation(n)
-
-    encoded = []
-    for ii, wi in zip(image_inds, watermark_inds):
-        canvas = mnist_data.data[ii]
-        stamp = watermarks[wi][0]
-        watermark, _ = model(stamp, canvas)
-        enc = canvas + watermark
-        encoded.append((enc, mnist_data.targets[ii], watermarks[wi][1]))
-
-    if not os.path.exists(save_folder):
-        os.mkdir(save_folder)
-    save_path = os.path.join(save_folder, "encoded_data.pickle")
-    with open(save_path, "wb") as f:
-        pickle.dump(encoded, f)
 
 
 def classification_accuracy(test_model, data):
@@ -101,6 +77,13 @@ def classification_accuracy(test_model, data):
     return correct/len(data.dataset.labels)
 
 
+def plot_loss_graph(losses, save_path=None):
+    t = np.linspace(0, 1, len(losses))
+    plt.plot(t, losses, linewidth=2)
+    if save_path:
+        plt.savefig(save_path)
+    plt.show()
+
+
 if __name__ == "__main__":
     create_mnist_watermarks(train=False)
-    # create_encoded_watermarks()
