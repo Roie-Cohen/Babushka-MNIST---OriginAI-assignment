@@ -3,6 +3,7 @@ import os
 import pickle
 
 from matplotlib import pyplot as plt
+from mnist_classifier import DigitClassifier
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torch
@@ -183,7 +184,7 @@ def train_watermark_encoder():
     watermarks = load_mnist_watermarks()
 
     learning_rate = 1E-4
-    steps = 1000
+    steps = 3000
 
     # load data
     mnist_data = MNIST(root='data', train=True, download=True, transform=ToTensor())
@@ -192,7 +193,8 @@ def train_watermark_encoder():
     watermark_classifier = torch.load("trained_models/watermark_classifier.pt")
     watermark_classifier.eval()
 
-    loss_func = invisible_watermark_loss
+    mnist_classifier = torch.load("trained_models/MNIST_classifier.pt")
+    mnist_classifier.eval()
 
     model = WatermarkEncoder()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -213,14 +215,14 @@ def train_watermark_encoder():
 
         w = model(label_vector, canvas)
 
-        loss = loss_func(w)
+        loss = invisible_watermark_loss(w)
 
         loss.backward()
         optimizer.step()
 
         losses.append(loss.item())
         t = step / steps
-        if step % 10 == 0:
+        if step % 30 == 0:
             print(f'process={100 * t:.2f}  loss={loss.item():.3f}  w_pixel={w.abs().median().item():.2f}')
 
         if t > 0.5 and loss < min_loss:
